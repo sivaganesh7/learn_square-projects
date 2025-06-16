@@ -1,39 +1,45 @@
-import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import React, { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import axios from "axios";
 
 const PatientRegister = () => {
   const [formData, setFormData] = useState({
-    firstName: '',
-    lastName: '',
-    email: '',
-    password: '',
-    confirmPassword: '',
+    firstName: "",
+    lastName: "",
+    email: "",
+    password: "",
+    confirmPassword: "",
   });
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
   const navigate = useNavigate();
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
-    setError('');
-    setMessage('');
+    setError("");
+    setMessage("");
   };
 
   const validateForm = () => {
-    if (!formData.firstName || !formData.lastName || !formData.email || !formData.password || !formData.confirmPassword) {
-      return 'Please fill details correctly';
+    if (
+      !formData.firstName ||
+      !formData.lastName ||
+      !formData.email ||
+      !formData.password ||
+      !formData.confirmPassword
+    ) {
+      return "Please fill details correctly";
     }
     if (!/^\S+@meditrack\.local$/.test(formData.email)) {
-      return 'Email must be from @meditrack.local domain';
+      return "Email must be from @meditrack.local domain";
     }
     if (formData.password.length < 8) {
-      return 'Password must be at least 8 characters';
+      return "Password must be at least 8 characters";
     }
     if (formData.password !== formData.confirmPassword) {
-      return 'Passwords do not match';
+      return "Passwords do not match";
     }
-    return '';
+    return "";
   };
 
   const handleSubmit = async (e) => {
@@ -46,16 +52,19 @@ const PatientRegister = () => {
     }
 
     try {
-      const response = await axios.post('http://localhost:5000/api/auth/register', {
-        name: `${formData.firstName} ${formData.lastName}`,
-        email: formData.email,
-        password: formData.password,
-        role: 'patient',
-      });
+      const response = await axios.post(
+        "http://localhost:5001/api/auth/register",
+        {
+          name: `${formData.firstName} ${formData.lastName}`,
+          email: formData.email,
+          password: formData.password,
+          role: "patient",
+        }
+      );
       setMessage(response.data.message);
-      setTimeout(() => navigate('/patient-login'), 2000); // Redirect after 2 seconds
+      setTimeout(() => navigate("/patient-login"), 2000); // Redirect after 2 seconds
     } catch (err) {
-      setError(err.response?.data?.message || 'Registration failed');
+      setError(err.response?.data?.message || "Registration failed");
     }
   };
 
@@ -63,23 +72,40 @@ const PatientRegister = () => {
     <div className="min-h-screen bg-gradient-to-br from-blue-100 to-purple-100 flex items-center justify-center py-16">
       <div className="max-w-md w-full space-y-10">
         <div className="text-center">
-          <Link to="/" className="text-blue-500 hover:text-blue-700 transition-all duration-300">← Back to Home</Link>
+          <Link
+            to="/"
+            className="text-blue-500 hover:text-blue-700 transition-all duration-300"
+          >
+            ← Back to Home
+          </Link>
           <div className="flex justify-center items-center mt-6">
             <span className="text-blue-500 text-3xl mr-3 animate-pulse">♥</span>
-            <h1 className="text-3xl font-bold text-gradient-blue">MediTrack Lite</h1>
+            <h1 className="text-3xl font-bold text-gradient-blue">
+              MediTrack Lite
+            </h1>
           </div>
-          <h2 className="mt-4 text-4xl font-bold text-gradient-purple">Join as Patient</h2>
-          <p className="mt-3 text-gray-600">Create your account to start booking appointments</p>
+          <h2 className="mt-4 text-4xl font-bold text-gradient-purple">
+            Join as Patient
+          </h2>
+          <p className="mt-3 text-gray-600">
+            Create your account to start booking appointments
+          </p>
         </div>
         <div className="bg-white p-10 rounded-lg shadow-xl transform hover:scale-105 transition-all duration-500">
-          <h3 className="text-xl font-semibold text-gradient-blue mb-4">Patient Registration</h3>
-          <p className="text-gray-600 mb-8">Fill in your details to get started with your healthcare journey</p>
+          <h3 className="text-xl font-semibold text-gradient-blue mb-4">
+            Patient Registration
+          </h3>
+          <p className="text-gray-600 mb-8">
+            Fill in your details to get started with your healthcare journey
+          </p>
           {message && <p className="text-green-500 mb-6">{message}</p>}
           {error && <p className="text-red-500 mb-6">{error}</p>}
           <div className="space-y-6">
             <div className="flex space-x-6">
               <div className="w-1/2">
-                <label className="block text-gray-700 font-medium mb-2">First Name</label>
+                <label className="block text-gray-700 font-medium mb-2">
+                  First Name
+                </label>
                 <input
                   type="text"
                   name="firstName"
@@ -91,7 +117,9 @@ const PatientRegister = () => {
                 />
               </div>
               <div className="w-1/2">
-                <label className="block text-gray-700 font-medium mb-2">Last Name</label>
+                <label className="block text-gray-700 font-medium mb-2">
+                  Last Name
+                </label>
                 <input
                   type="text"
                   name="lastName"
@@ -104,7 +132,9 @@ const PatientRegister = () => {
               </div>
             </div>
             <div>
-              <label className="block text-gray-700 font-medium mb-2">Email Address</label>
+              <label className="block text-gray-700 font-medium mb-2">
+                Email Address
+              </label>
               <input
                 type="email"
                 name="email"
@@ -116,7 +146,9 @@ const PatientRegister = () => {
               />
             </div>
             <div>
-              <label className="block text-gray-700 font-medium mb-2">Password</label>
+              <label className="block text-gray-700 font-medium mb-2">
+                Password
+              </label>
               <input
                 type="password"
                 name="password"
@@ -128,7 +160,9 @@ const PatientRegister = () => {
               />
             </div>
             <div>
-              <label className="block text-gray-700 font-medium mb-2">Confirm Password</label>
+              <label className="block text-gray-700 font-medium mb-2">
+                Confirm Password
+              </label>
               <input
                 type="password"
                 name="confirmPassword"
@@ -147,8 +181,13 @@ const PatientRegister = () => {
             </button>
           </div>
           <p className="mt-6 text-center text-gray-600">
-            Already have an account?{' '}
-           <Link to="/patient-login" className="text-blue-500 hover:text-blue-700 transition-all duration-300">Sign in here</Link>
+            Already have an account?{" "}
+            <Link
+              to="/patient-login"
+              className="text-blue-500 hover:text-blue-700 transition-all duration-300"
+            >
+              Sign in here
+            </Link>
           </p>
         </div>
       </div>
