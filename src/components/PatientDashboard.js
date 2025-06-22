@@ -4,6 +4,7 @@ import { Calendar, Eye, Activity } from 'lucide-react';
 import axios from 'axios';
 import { API_BASE_URL } from '../config';
 import PatientNavbar from '../components/PatientNavbar';
+import Footer from './Footer';
 
 const PatientDashboard = () => {
   const navigate = useNavigate();
@@ -147,6 +148,7 @@ const PatientDashboard = () => {
           </div>
         </div>
       </main>
+        <Footer />
     </div>
   );
 };

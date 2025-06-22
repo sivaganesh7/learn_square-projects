@@ -21,6 +21,26 @@ const doctorSchema = new mongoose.Schema({
     type: String, 
     required: true,
   },
+  phoneNumber: {
+    type: String,
+    trim: true,
+  },
+  experience: {
+    type: String,
+    trim: true,
+  },
+  qualifications: {
+    type: String,
+    trim: true,
+  },
+  bio: {
+    type: String,
+    trim: true,
+  },
+  workingHours: {
+    type: String,
+    trim: true,
+  },
   createdAt: { 
     type: Date, 
     default: Date.now,

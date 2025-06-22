@@ -17,7 +17,7 @@ const appointmentSchema = new mongoose.Schema({
   },
   status: { 
     type: String, 
-    enum: ['pending', 'confirmed', 'cancelled'], 
+    enum: ['pending', 'confirmed', 'completed', 'cancelled'], // Added 'completed'
     default: 'pending',
   },
   createdAt: { 
@@ -25,5 +25,8 @@ const appointmentSchema = new mongoose.Schema({
     default: Date.now,
   },
 });
+
+// Optional: Add an index on date for better query performance
+appointmentSchema.index({ date: 1 });
 
 module.exports = mongoose.model('Appointment', appointmentSchema);

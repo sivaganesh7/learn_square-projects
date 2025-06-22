@@ -22,12 +22,16 @@ app.get("*", (req, res) => {
 });
 
 // MongoDB Connection
+const mongoURI = encodeURI(process.env.MONGO_URI);
 mongoose
-  .connect(process.env.MONGO_URI, {
+  .connect(mongoURI, {
     useNewUrlParser: true,
     useUnifiedTopology: true,
+    retryWrites: true,
+    w: "majority",
+    ssl: true,
   })
-  .then(() => console.log("Connected to MongoDB"))
+  .then(() => console.log("Connected to MongoDB successfully"))
   .catch((err) => {
     console.error("Failed to connect to MongoDB:", err.message);
     process.exit(1); // Exit the process if MongoDB connection fails
@@ -42,12 +46,8 @@ const server = app
   })
   .on("error", (err) => {
     if (err.code === "EADDRINUSE") {
-      console.error(
-        `Port ${PORT} is already in use. Please free the port or use a different one.`
-      );
-      console.error(
-        "To find the process using the port, run: netstat -aon | findstr :5000"
-      );
+      console.error(`Port ${PORT} is already in use. Please free the port or use a different one.`);
+      console.error("To find the process using the port, run: netstat -aon | findstr :5001");
       console.error("To kill the process, run: taskkill /PID <PID> /F");
       process.exit(1);
     } else {
@@ -60,9 +60,25 @@ const server = app
 process.on("SIGINT", () => {
   console.log("Shutting down server...");
   server.close(() => {
-    mongoose.connection.close(() => {
+    mongoose.connection.close(false).then(() => {
       console.log("MongoDB connection closed.");
       process.exit(0);
+    }).catch((err) => {
+      console.error("Error closing MongoDB connection:", err.message);
+      process.exit(1);
+    });
+  });
+});
+
+process.on("SIGTERM", () => {
+  console.log("Received SIGTERM, shutting down server...");
+  server.close(() => {
+    mongoose.connection.close(false).then(() => {
+      console.log("MongoDB connection closed.");
+      process.exit(0);
+    }).catch((err) => {
+      console.error("Error closing MongoDB connection:", err.message);
+      process.exit(1);
     });
   });
 });

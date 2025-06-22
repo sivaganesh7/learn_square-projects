@@ -12,193 +12,93 @@ const Appointment = require("../models/Appointment");
 const Prescription = require("../models/Prescription");
 const TokenBlacklist = require("../models/TokenBlacklist");
 
-// Rate Limiting with MongoDB Store
-const loginLimiter = rateLimit({
+// Rate Limiting Configurations
+const limiterConfig = {
   store: new rateLimitMongo({
-    uri: process.env.MONGO_URI, // ✅ use the Atlas URI from .env
-    collectionName: "loginRateLimits",
+    uri: process.env.MONGO_URI,
     expireTimeMs: 15 * 60 * 1000,
   }),
-  max: 5,
-  message: "Too many login attempts. Please try again after 15 minutes.",
-});
+  message: "Too many attempts. Please try again later.",
+};
 
-const resetPasswordLimiter = rateLimit({
-  store: new rateLimitMongo({
-    uri: "mongodb://localhost:27017/meditrack-lite",
-    collectionName: "resetPasswordRateLimits",
-    expireTimeMs: 60 * 60 * 1000, // 1 hour
-  }),
-  max: 3, // Limit to 3 requests per hour
-  message: "Too many password reset attempts. Please try again after 1 hour.",
-});
+const loginLimiter = rateLimit({ ...limiterConfig, max: 5, collectionName: "loginRateLimits" });
+const resetPasswordLimiter = rateLimit({ ...limiterConfig, max: 3, collectionName: "resetPasswordRateLimits", expireTimeMs: 60 * 60 * 1000 });
 
 // Authentication Middleware
 const authenticateToken = async (req, res, next) => {
   const authHeader = req.headers["authorization"];
   const token = authHeader && authHeader.split(" ")[1];
 
-  if (!token) {
-    return res.status(401).json({ message: "Access token required" });
-  }
+  if (!token) return res.status(401).json({ message: "Access token required" });
 
   try {
-    // Check if token is blacklisted
     const blacklistedToken = await TokenBlacklist.findOne({ token });
-    if (blacklistedToken) {
-      return res
-        .status(403)
-        .json({ message: "Token has been invalidated. Please log in again." });
-    }
+    if (blacklistedToken) return res.status(403).json({ message: "Token invalidated. Please log in again." });
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.user = decoded;
     next();
   } catch (err) {
-    console.error(
-      `Token verification error at ${new Date().toISOString()}:`,
-      err.message
-    );
-    return res.status(403).json({ message: "Invalid or expired token" });
+    console.error(`Token verification error at ${new Date().toISOString()}:`, err.message);
+    res.status(403).json({ message: "Invalid or expired token" });
   }
 };
 
 // Input Validation Middleware
-const validateRegisterInput = (req, res, next) => {
-  const { name, email, password, role, specialization } = req.body;
+const validateInput = (fields) => (req, res, next) => {
+  const { email, password, role, name, specialization, newPassword, phoneNumber, experience, qualifications, bio, workingHours, ...rest } = req.body;
+  const required = fields.filter((field) => !req.body[field]);
+  if (required.length) return res.status(400).json({ message: `Missing fields: ${required.join(", ")}` });
 
-  if (!name || !email || !password || !role) {
-    return res
-      .status(400)
-      .json({
-        message: "All fields (name, email, password, role) are required",
-      });
-  }
-
-  if (!/^\S+@meditrack\.local$/.test(email)) {
-    return res
-      .status(400)
-      .json({ message: "Email must be from @meditrack.local domain" });
-  }
-
-  if (password.length < 8) {
-    return res
-      .status(400)
-      .json({ message: "Password must be at least 8 characters" });
-  }
-
-  if (!["patient", "doctor"].includes(role.toLowerCase())) {
-    return res.status(400).json({ message: "Invalid role" });
-  }
-
-  if (role.toLowerCase() === "doctor" && !specialization) {
-    return res
-      .status(400)
-      .json({ message: "Specialization is required for doctors" });
-  }
+  if (!/^\S+@meditrack\.local$/.test(email)) return res.status(400).json({ message: "Email must be from @meditrack.local domain" });
+  if (password && password.length < 8) return res.status(400).json({ message: "Password must be at least 8 characters" });
+  if (newPassword && newPassword.length < 8) return res.status(400).json({ message: "New password must be at least 8 characters" });
+  if (!["patient", "doctor"].includes(role?.toLowerCase())) return res.status(400).json({ message: "Invalid role" });
+  if (role?.toLowerCase() === "doctor" && !specialization && fields.includes("specialization")) return res.status(400).json({ message: "Specialization is required for doctors" });
 
   next();
 };
 
-const validateLoginInput = (req, res, next) => {
-  const { email, password, role } = req.body;
+const validateRegisterInput = validateInput(["name", "email", "password", "role", "specialization"]);
+const validateLoginInput = validateInput(["email", "password", "role"]);
+const validateResetPasswordInput = validateInput(["email", "role", "newPassword"]);
+const validateProfileUpdateInput = validateInput(["name", "email", "specialization"]);
 
-  if (!email || !password || !role) {
-    return res
-      .status(400)
-      .json({ message: "All fields (email, password, role) are required" });
-  }
-
-  if (!/^\S+@meditrack\.local$/.test(email)) {
-    return res
-      .status(400)
-      .json({ message: "Email must be from @meditrack.local domain" });
-  }
-
-  if (!["patient", "doctor"].includes(role.toLowerCase())) {
-    return res.status(400).json({ message: "Invalid role" });
-  }
-
-  next();
+// Utility Functions
+const hashPassword = async (password) => {
+  const salt = await bcrypt.genSalt(10);
+  return await bcrypt.hash(password, salt);
 };
 
-const validateResetPasswordInput = (req, res, next) => {
-  const { email, role, newPassword } = req.body;
-
-  if (!email || !role || !newPassword) {
-    return res
-      .status(400)
-      .json({ message: "All fields (email, role, newPassword) are required" });
-  }
-
-  if (!/^\S+@meditrack\.local$/.test(email)) {
-    return res
-      .status(400)
-      .json({ message: "Email must be from @meditrack.local domain" });
-  }
-
-  if (!["patient", "doctor"].includes(role.toLowerCase())) {
-    return res.status(400).json({ message: "Invalid role" });
-  }
-
-  if (newPassword.length < 8) {
-    return res
-      .status(400)
-      .json({ message: "New password must be at least 8 characters" });
-  }
-
-  next();
-};
+const formatDateIST = (date) => date.toLocaleString("en-US", {
+  timeZone: "Asia/Kolkata",
+  weekday: "long",
+  year: "numeric",
+  month: "long",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: true,
+});
 
 // Register Route
 router.post("/register", validateRegisterInput, async (req, res) => {
   const { name, email, password, role, specialization } = req.body;
 
   try {
-    const normalizedEmail = email.toLowerCase();
-    const normalizedRole = role.toLowerCase();
+    const normalized = { email: email.toLowerCase(), role: role.toLowerCase() };
+    if (await User.findOne({ email: normalized.email })) return res.status(400).json({ message: "User already exists" });
 
-    let user = await User.findOne({ email: normalizedEmail });
-    if (user) {
-      return res.status(400).json({ message: "User already exists" });
-    }
-
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
-
-    user = new User({
-      name,
-      email: normalizedEmail,
-      password: hashedPassword,
-      role: normalizedRole,
-      specialization: normalizedRole === "doctor" ? specialization : "",
-    });
-
+    const hashedPassword = await hashPassword(password);
+    const user = new User({ ...normalized, name, password: hashedPassword, specialization: normalized.role === "doctor" ? specialization : "" });
     await user.save();
 
-    if (normalizedRole === "patient") {
-      const patient = new Patient({
-        userId: user._id,
-        name,
-        email: normalizedEmail,
-      });
-      await patient.save();
-    } else if (normalizedRole === "doctor") {
-      const doctor = new Doctor({
-        userId: user._id,
-        name,
-        email: normalizedEmail,
-        specialization,
-      });
-      await doctor.save();
-    }
+    if (normalized.role === "patient") await new Patient({ userId: user._id, name, email: normalized.email }).save();
+    else if (normalized.role === "doctor") await new Doctor({ userId: user._id, name, email: normalized.email, specialization }).save();
 
     res.status(201).json({ message: "User registered successfully" });
   } catch (err) {
-    console.error(
-      `Registration error at ${new Date().toISOString()}:`,
-      err.message
-    );
+    console.error(`Registration error at ${new Date().toISOString()}:`, err.message);
     res.status(500).json({ message: "Server error" });
   }
 });
@@ -208,55 +108,12 @@ router.post("/login", validateLoginInput, loginLimiter, async (req, res) => {
   const { email, password, role } = req.body;
 
   try {
-    const normalizedEmail = email.toLowerCase();
-    const normalizedRole = role.toLowerCase();
+    const normalized = { email: email.toLowerCase(), role: role.toLowerCase() };
+    const user = await User.findOne({ email: normalized.email, role: normalized.role });
+    if (!user || !(await bcrypt.compare(password, user.password))) return res.status(400).json({ message: "Invalid email, password, or role" });
 
-    console.log(
-      `Login attempt at ${new Date().toISOString()}: email=${normalizedEmail}, role=${normalizedRole}`
-    );
-
-    const user = await User.findOne({
-      email: normalizedEmail,
-      role: normalizedRole,
-    });
-    if (!user) {
-      console.log("User not found");
-      return res
-        .status(400)
-        .json({ message: "Invalid email, password, or role" });
-    }
-
-    console.log("User found:", user);
-
-    const isMatch = await bcrypt.compare(password, user.password);
-    console.log("Password match:", isMatch);
-    if (!isMatch) {
-      return res
-        .status(400)
-        .json({ message: "Invalid email, password, or role" });
-    }
-
-    if (!process.env.JWT_SECRET) {
-      console.error("JWT_SECRET not set in environment variables");
-      return res.status(500).json({ message: "Server configuration error" });
-    }
-
-    const token = jwt.sign(
-      { id: user._id, role: user.role, name: user.name, email: user.email },
-      process.env.JWT_SECRET,
-      { expiresIn: "1h" }
-    );
-
-    res.status(200).json({
-      token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        lastPasswordReset: user.lastPasswordReset,
-      },
-    });
+    const token = jwt.sign({ id: user._id, role: user.role, name: user.name, email: user.email }, process.env.JWT_SECRET, { expiresIn: "1h" });
+    res.status(200).json({ token, user: { id: user._id, name: user.name, email: user.email, role: user.role, lastPasswordReset: user.lastPasswordReset } });
   } catch (err) {
     console.error(`Login error at ${new Date().toISOString()}:`, err.message);
     res.status(500).json({ message: "Server error" });
@@ -265,19 +122,10 @@ router.post("/login", validateLoginInput, loginLimiter, async (req, res) => {
 
 // Logout Route
 router.post("/logout", authenticateToken, async (req, res) => {
-  const authHeader = req.headers["authorization"];
-  const token = authHeader && authHeader.split(" ")[1];
-
+  const token = req.headers["authorization"]?.split(" ")[1];
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const expiresAt = new Date(decoded.exp * 1000); // Convert expiration from seconds to milliseconds
-
-    const blacklistedToken = new TokenBlacklist({
-      token,
-      expiresAt,
-    });
-
-    await blacklistedToken.save();
+    await new TokenBlacklist({ token, expiresAt: new Date(decoded.exp * 1000) }).save();
     res.status(200).json({ message: "Logged out successfully" });
   } catch (err) {
     console.error(`Logout error at ${new Date().toISOString()}:`, err.message);
@@ -286,208 +134,129 @@ router.post("/logout", authenticateToken, async (req, res) => {
 });
 
 // Reset Password Route
-router.post(
-  "/reset-password",
-  validateResetPasswordInput,
-  resetPasswordLimiter,
-  async (req, res) => {
-    const { email, role, newPassword } = req.body;
+router.post("/reset-password", validateResetPasswordInput, resetPasswordLimiter, async (req, res) => {
+  const { email, role, newPassword } = req.body;
 
-    try {
-      const normalizedEmail = email.toLowerCase();
-      const normalizedRole = role.toLowerCase();
+  try {
+    const normalized = { email: email.toLowerCase(), role: role.toLowerCase() };
+    const user = await User.findOne({ email: normalized.email, role: normalized.role });
+    if (!user) return res.status(404).json({ message: "User not found" });
 
-      const user = await User.findOne({
-        email: normalizedEmail,
-        role: normalizedRole,
-      });
-      if (!user) {
-        return res.status(404).json({ message: "User not found" });
-      }
+    const lastReset = user.lastPasswordReset ? new Date(user.lastPasswordReset) : null;
+    if (lastReset && (Date.now() - lastReset) / (1000 * 60 * 60) < 24) return res.status(403).json({ message: `Password reset available after ${formatDateIST(new Date(lastReset.getTime() + 24 * 60 * 60 * 1000))}` });
 
-      // Check if the last reset was within 24 hours
-      if (user.lastPasswordReset) {
-        const lastResetTime = new Date(user.lastPasswordReset);
-        const currentTime = new Date();
-        const timeDiff = (currentTime - lastResetTime) / (1000 * 60 * 60); // Difference in hours
-        if (timeDiff < 24) {
-          const lastResetTimeIST = lastResetTime.toLocaleString("en-US", {
-            timeZone: "Asia/Kolkata",
-            weekday: "long",
-            year: "numeric",
-            month: "long",
-            day: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-            hour12: true,
-          });
-          return res.status(403).json({
-            message: `You can only reset your password once every 24 hours. Last reset was on ${lastResetTimeIST}.`,
-          });
-        }
-      }
+    user.password = await hashPassword(newPassword);
+    user.lastPasswordReset = new Date();
+    await user.save();
 
-      const salt = await bcrypt.genSalt(10);
-      const hashedPassword = await bcrypt.hash(newPassword, salt);
-
-      user.password = hashedPassword;
-      user.lastPasswordReset = new Date();
-      await user.save();
-
-      const lastPasswordResetIST = user.lastPasswordReset.toLocaleString(
-        "en-US",
-        {
-          timeZone: "Asia/Kolkata",
-          weekday: "long",
-          year: "numeric",
-          month: "long",
-          day: "numeric",
-          hour: "2-digit",
-          minute: "2-digit",
-          hour12: true,
-        }
-      );
-
-      res.status(200).json({
-        message: "Password updated successfully",
-        lastPasswordReset: lastPasswordResetIST,
-      });
-    } catch (err) {
-      console.error(
-        `Reset password error at ${new Date().toISOString()}:`,
-        err.message
-      );
-      res.status(500).json({ message: "Server error" });
-    }
+    res.status(200).json({ message: "Password updated successfully", lastPasswordReset: formatDateIST(user.lastPasswordReset) });
+  } catch (err) {
+    console.error(`Reset password error at ${new Date().toISOString()}:`, err.message);
+    res.status(500).json({ message: "Server error" });
   }
-);
+});
 
-// Fetch User Profile (Authenticated Route)
+// Fetch User Profile
 router.get("/profile", authenticateToken, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select("-password");
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
+    if (!user) return res.status(404).json({ message: "User not found" });
 
     const userData = user.toObject();
-    if (userData.lastPasswordReset) {
-      userData.lastPasswordReset = user.lastPasswordReset.toLocaleString(
-        "en-US",
-        {
-          timeZone: "Asia/Kolkata",
-          weekday: "long",
-          year: "numeric",
-          month: "long",
-          day: "numeric",
-          hour: "2-digit",
-          minute: "2-digit",
-          hour12: true,
-        }
-      );
-    }
-
+    if (userData.lastPasswordReset) userData.lastPasswordReset = formatDateIST(user.lastPasswordReset);
     res.status(200).json(userData);
   } catch (err) {
-    console.error(
-      `Profile fetch error at ${new Date().toISOString()}:`,
-      err.message
-    );
+    console.error(`Profile fetch error at ${new Date().toISOString()}:`, err.message);
     res.status(500).json({ message: "Server error" });
   }
 });
 
-// Fetch Doctors (Protected Route)
+// Update Doctor Profile
+router.put("/doctors/:id", authenticateToken, validateProfileUpdateInput, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, email, phoneNumber, specialization, experience, qualifications, bio, workingHours } = req.body;
+
+    const doctor = await Doctor.findOne({ userId: req.user.id });
+    if (!doctor || doctor._id.toString() !== id) return res.status(403).json({ message: "Unauthorized" });
+
+    doctor.name = name;
+    doctor.email = email.toLowerCase();
+    doctor.phoneNumber = phoneNumber;
+    doctor.specialization = specialization;
+    doctor.experience = experience;
+    doctor.qualifications = qualifications;
+    doctor.bio = bio;
+    doctor.workingHours = workingHours;
+
+    await doctor.save();
+
+    const user = await User.findById(req.user.id);
+    user.name = name;
+    user.email = email.toLowerCase();
+    await user.save();
+
+    res.status(200).json({ message: "Profile updated successfully", doctor });
+  } catch (err) {
+    console.error(`Profile update error at ${new Date().toISOString()}:`, err.message);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Fetch Doctors
 router.get("/doctors", authenticateToken, async (req, res) => {
   try {
     const { userId } = req.query;
-    let doctors;
-    if (userId) {
-      if (!mongoose.Types.ObjectId.isValid(userId)) {
-        return res.status(400).json({ message: "Invalid userId" });
-      }
-      doctors = await Doctor.find({ userId }).populate("userId", "name email");
-    } else {
-      doctors = await Doctor.find().populate("userId", "name email");
-    }
+    const query = userId && mongoose.Types.ObjectId.isValid(userId) ? { userId } : {};
+    const doctors = await Doctor.find(query).populate("userId", "name email");
+    if (!doctors.length) return res.status(404).json({ message: "No doctors available" });
     res.status(200).json(doctors);
   } catch (err) {
-    console.error(
-      `Error fetching doctors at ${new Date().toISOString()}:`,
-      err.message
-    );
+    console.error(`Error fetching doctors at ${new Date().toISOString()}:`, err.message);
     res.status(500).json({ message: "Server error" });
   }
 });
 
-// Fetch Patients by userId (Protected Route)
+// Fetch Patients
 router.get("/patients", authenticateToken, async (req, res) => {
   try {
     const { userId } = req.query;
-    if (!userId) {
-      return res.status(400).json({ message: "userId is required" });
-    }
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({ message: "Invalid userId" });
-    }
-    const patients = await Patient.find({ userId }).populate(
-      "userId",
-      "name email"
-    );
+    if (!userId || !mongoose.Types.ObjectId.isValid(userId)) return res.status(400).json({ message: "Valid userId is required" });
+    const patients = await Patient.find({ userId }).populate("userId", "name email");
     res.status(200).json(patients);
   } catch (err) {
-    console.error(
-      `Error fetching patients at ${new Date().toISOString()}:`,
-      err.message
-    );
+    console.error(`Error fetching patients at ${new Date().toISOString()}:`, err.message);
     res.status(500).json({ message: "Server error" });
   }
 });
 
-// Book Appointment (Protected Route)
+// Book Appointment
 router.post("/appointments", authenticateToken, async (req, res) => {
   const { patientId, doctorId, date, healthIssue } = req.body;
 
-  if (!patientId || !doctorId || !date || !healthIssue) {
-    return res
-      .status(400)
-      .json({
-        message:
-          "All fields (patientId, doctorId, date, healthIssue) are required",
-      });
-  }
+  if (!patientId || !doctorId || !date || !healthIssue)
+    return res.status(400).json({ message: "All fields required" });
 
-  if (
-    !mongoose.Types.ObjectId.isValid(patientId) ||
-    !mongoose.Types.ObjectId.isValid(doctorId)
-  ) {
-    return res.status(400).json({ message: "Invalid patientId or doctorId" });
-  }
+  if (!mongoose.Types.ObjectId.isValid(patientId) || !mongoose.Types.ObjectId.isValid(doctorId))
+    return res.status(400).json({ message: "Invalid ID" });
 
   try {
     const appointmentDate = new Date(date);
-    if (isNaN(appointmentDate.getTime())) {
-      return res.status(400).json({ message: "Invalid date format" });
-    }
+    if (isNaN(appointmentDate.getTime()) || appointmentDate < new Date())
+      return res.status(400).json({ message: "Invalid or past date" });
 
-    const currentTime = new Date();
-    if (appointmentDate < currentTime) {
-      return res
-        .status(400)
-        .json({ message: "Cannot book appointments in the past" });
-    }
+    const [doctor, patient] = await Promise.all([
+      Doctor.findById(doctorId),
+      Patient.findById(patientId),
+    ]);
 
-    // Verify that the patientId matches the logged-in user (if role is patient)
-    if (req.user.role === "patient" && req.user.id !== patientId) {
-      return res
-        .status(403)
-        .json({ message: "You can only book appointments for yourself" });
-    }
+    if (!doctor || !patient)
+      return res.status(404).json({ message: "Doctor or patient not found" });
 
-    // Verify that the doctorId exists
-    const doctor = await Doctor.findById(doctorId);
-    if (!doctor) {
-      return res.status(404).json({ message: "Doctor not found" });
+    if (req.user.role === "patient") {
+      if (patient.userId.toString() !== req.user.id.toString()) {
+        return res.status(403).json({ message: "Patients can only book their own appointments" });
+      }
     }
 
     const appointment = new Appointment({
@@ -499,312 +268,127 @@ router.post("/appointments", authenticateToken, async (req, res) => {
     });
 
     await appointment.save();
-    res
-      .status(201)
-      .json({ message: "Appointment booked successfully", appointment });
+    res.status(201).json({ message: "Appointment booked", appointment });
   } catch (err) {
-    console.error(
-      `Error booking appointment at ${new Date().toISOString()}:`,
-      err.message
-    );
+    console.error(`Error booking appointment at ${new Date().toISOString()}:`, err.message);
     res.status(500).json({ message: "Server error" });
   }
 });
 
-// Fetch Patient Appointments (Protected Route)
-router.get(
-  "/appointments/patient/:patientId",
-  authenticateToken,
-  async (req, res) => {
-    try {
-      const patientId = req.params.patientId;
-      if (!mongoose.Types.ObjectId.isValid(patientId)) {
-        return res.status(400).json({ message: "Invalid patientId" });
-      }
-
-      // Verify that the patientId matches the logged-in user (if role is patient)
-      if (req.user.role === "patient" && req.user.id !== patientId) {
-        return res
-          .status(403)
-          .json({ message: "You can only view your own appointments" });
-      }
-
-      const appointments = await Appointment.find({ patientId })
-        .populate("doctorId", "name specialization")
-        .populate("patientId", "name email");
-      res.status(200).json(appointments);
-    } catch (err) {
-      console.error(
-        `Error fetching patient appointments at ${new Date().toISOString()}:`,
-        err.message
-      );
-      res.status(500).json({ message: "Server error" });
-    }
+// Fetch Patient Appointments
+router.get("/appointments/patient/:patientId", authenticateToken, async (req, res) => {
+  try {
+    const patientId = req.params.patientId;
+    if (!mongoose.Types.ObjectId.isValid(patientId)) return res.status(400).json({ message: "Invalid patientId" });
+    if (req.user.role === "patient" && req.user.id.toString() !== patientId) return res.status(403).json({ message: "Own appointments only" });
+    const appointments = await Appointment.find({ patientId }).populate("doctorId", "name specialization").populate("patientId", "name email");
+    res.status(200).json(appointments);
+  } catch (err) {
+    console.error(`Error fetching patient appointments at ${new Date().toISOString()}:`, err.message);
+    res.status(500).json({ message: "Server error" });
   }
-);
+});
 
-// Fetch Doctor Appointments (Protected Route)
-router.get(
-  "/appointments/doctor/:doctorId",
-  authenticateToken,
-  async (req, res) => {
-    try {
-      const doctorId = req.params.doctorId;
-      if (!mongoose.Types.ObjectId.isValid(doctorId)) {
-        return res.status(400).json({ message: "Invalid doctorId" });
-      }
-
-      // Verify that the doctorId matches the logged-in user (if role is doctor)
-      if (req.user.role === "doctor") {
-        const doctor = await Doctor.findOne({ userId: req.user.id });
-        if (!doctor || doctor._id.toString() !== doctorId) {
-          return res
-            .status(403)
-            .json({ message: "You can only view your own appointments" });
-        }
-      }
-
-      const appointments = await Appointment.find({ doctorId })
-        .populate("patientId", "name email")
-        .populate("doctorId", "name specialization");
-      res.status(200).json(appointments);
-    } catch (err) {
-      console.error(
-        `Error fetching doctor appointments at ${new Date().toISOString()}:`,
-        err.message
-      );
-      res.status(500).json({ message: "Server error" });
+// Fetch Doctor Appointments
+router.get("/appointments/doctor/:doctorId", authenticateToken, async (req, res) => {
+  try {
+    const doctorId = req.params.doctorId;
+    if (!mongoose.Types.ObjectId.isValid(doctorId)) return res.status(400).json({ message: "Invalid doctorId" });
+    if (req.user.role === "doctor") {
+      const doctor = await Doctor.findOne({ userId: req.user.id });
+      if (!doctor || doctor._id.toString() !== doctorId) return res.status(403).json({ message: "Own appointments only" });
     }
+    const appointments = await Appointment.find({ doctorId }).populate("patientId", "name email").populate("doctorId", "name specialization");
+    res.status(200).json(appointments);
+  } catch (err) {
+    console.error(`Error fetching doctor appointments at ${new Date().toISOString()}:`, err.message);
+    res.status(500).json({ message: "Server error" });
   }
-);
+});
 
-// Update Appointment Status (Protected Route)
+// Update Appointment Status
 router.put("/appointments/:id/status", authenticateToken, async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
-
-  if (!mongoose.Types.ObjectId.isValid(id)) {
-    return res.status(400).json({ message: "Invalid appointment ID" });
-  }
-
-  if (!status) {
-    return res.status(400).json({ message: "Status is required" });
-  }
+  if (!mongoose.Types.ObjectId.isValid(id) || !status) return res.status(400).json({ message: "Invalid ID or missing status" });
 
   try {
-    const validStatuses = ["pending", "confirmed", "completed"];
-    if (!validStatuses.includes(status)) {
-      return res.status(400).json({ message: "Invalid status" });
-    }
+    const validStatuses = ["pending", "confirmed", "completed", "cancelled"];
+    if (!validStatuses.includes(status)) return res.status(400).json({ message: "Invalid status" });
 
     const appointment = await Appointment.findById(id).populate("doctorId");
-    if (!appointment) {
-      return res.status(404).json({ message: "Appointment not found" });
-    }
-
-    // Only doctors can update appointment status, and only for their own appointments
-    if (req.user.role !== "doctor") {
-      return res
-        .status(403)
-        .json({ message: "Only doctors can update appointment status" });
-    }
+    if (!appointment || req.user.role !== "doctor") return res.status(403).json({ message: "Unauthorized" });
 
     const doctor = await Doctor.findOne({ userId: req.user.id });
-    if (
-      !doctor ||
-      doctor._id.toString() !== appointment.doctorId._id.toString()
-    ) {
-      return res
-        .status(403)
-        .json({ message: "You can only update your own appointments" });
-    }
+    if (!doctor || doctor._id.toString() !== appointment.doctorId._id.toString()) return res.status(403).json({ message: "Own appointments only" });
 
-    if (appointment.status === "pending" && status !== "confirmed") {
-      return res
-        .status(400)
-        .json({ message: "Pending appointments can only be confirmed" });
-    }
-    if (appointment.status === "confirmed" && status !== "completed") {
-      return res
-        .status(400)
-        .json({ message: "Confirmed appointments can only be completed" });
-    }
-    if (appointment.status === "completed") {
-      return res
-        .status(400)
-        .json({ message: "Completed appointments cannot be modified" });
-    }
+    const statusRules = { pending: ["confirmed"], confirmed: ["completed"], completed: [], cancelled: [] };
+    if (!statusRules[appointment.status].includes(status)) return res.status(400).json({ message: `Invalid transition from ${appointment.status}` });
 
     appointment.status = status;
     await appointment.save();
-
-    res
-      .status(200)
-      .json({ message: "Appointment status updated", appointment });
+    res.status(200).json({ message: "Status updated", appointment });
   } catch (err) {
-    console.error(
-      `Error updating appointment status at ${new Date().toISOString()}:`,
-      err.message
-    );
+    console.error(`Error updating appointment status at ${new Date().toISOString()}:`, err.message);
     res.status(500).json({ message: "Server error" });
   }
 });
 
-// Create Prescription (Protected Route)
+// Create Prescription
 router.post("/prescriptions", authenticateToken, async (req, res) => {
   const { appointmentId, patientId, doctorId, details } = req.body;
-
-  if (!appointmentId || !patientId || !doctorId || !details) {
-    return res
-      .status(400)
-      .json({
-        message:
-          "All fields (appointmentId, patientId, doctorId, details) are required",
-      });
-  }
-
-  if (
-    !mongoose.Types.ObjectId.isValid(appointmentId) ||
-    !mongoose.Types.ObjectId.isValid(patientId) ||
-    !mongoose.Types.ObjectId.isValid(doctorId)
-  ) {
-    return res.status(400).json({ message: "Invalid ID format" });
-  }
+  if (!appointmentId || !patientId || !doctorId || !details) return res.status(400).json({ message: "All fields required" });
+  if (!mongoose.Types.ObjectId.isValid(appointmentId) || !mongoose.Types.ObjectId.isValid(patientId) || !mongoose.Types.ObjectId.isValid(doctorId)) return res.status(400).json({ message: "Invalid ID" });
 
   try {
-    // Verify that the doctorId matches the logged-in user
-    if (req.user.role !== "doctor") {
-      return res
-        .status(403)
-        .json({ message: "Only doctors can create prescriptions" });
-    }
+    if (req.user.role !== "doctor") return res.status(403).json({ message: "Doctors only" });
 
     const doctor = await Doctor.findOne({ userId: req.user.id });
-    if (!doctor || doctor._id.toString() !== doctorId) {
-      return res
-        .status(403)
-        .json({
-          message:
-            "You can only create prescriptions for your own appointments",
-        });
-    }
+    if (!doctor || doctor._id.toString() !== doctorId) return res.status(403).json({ message: "Own appointments only" });
 
-    // Verify the appointment exists and belongs to this doctor
     const appointment = await Appointment.findById(appointmentId);
-    if (!appointment) {
-      return res.status(404).json({ message: "Appointment not found" });
-    }
+    if (!appointment || appointment.doctorId.toString() !== doctorId || appointment.patientId.toString() !== patientId || appointment.status !== "pending") return res.status(400).json({ message: "Invalid appointment" });
 
-    if (
-      appointment.doctorId.toString() !== doctorId ||
-      appointment.patientId.toString() !== patientId
-    ) {
-      return res
-        .status(403)
-        .json({
-          message: "Invalid appointment, patient, or doctor association",
-        });
-    }
-
-    // Check appointment status
-    if (appointment.status !== "pending") {
-      return res
-        .status(400)
-        .json({
-          message: `Cannot create prescription for an appointment with status "${appointment.status}"`,
-        });
-    }
-
-    const prescription = new Prescription({
-      appointmentId,
-      patientId,
-      doctorId,
-      details,
-    });
-
+    const prescription = new Prescription({ appointmentId, patientId, doctorId, details });
     await prescription.save();
     appointment.status = "confirmed";
     await appointment.save();
-
-    res
-      .status(201)
-      .json({ message: "Prescription added successfully", prescription });
+    res.status(201).json({ message: "Prescription added", prescription });
   } catch (err) {
-    console.error(
-      `Error creating prescription at ${new Date().toISOString()}:`,
-      err.message
-    );
+    console.error(`Error creating prescription at ${new Date().toISOString()}:`, err.message);
     res.status(500).json({ message: "Server error" });
   }
 });
 
-// Fetch Patient Prescriptions (Protected Route)
-router.get(
-  "/prescriptions/patient/:patientId",
-  authenticateToken,
-  async (req, res) => {
-    try {
-      const patientId = req.params.patientId;
-      if (!mongoose.Types.ObjectId.isValid(patientId)) {
-        return res.status(400).json({ message: "Invalid patientId" });
-      }
-
-      // Verify that the patientId matches the logged-in user (if role is patient)
-      if (req.user.role === "patient" && req.user.id !== patientId) {
-        return res
-          .status(403)
-          .json({ message: "You can only view your own prescriptions" });
-      }
-
-      const prescriptions = await Prescription.find({ patientId })
-        .populate("doctorId", "name specialization")
-        .populate("patientId", "name email")
-        .populate("appointmentId", "date");
-      res.status(200).json(prescriptions);
-    } catch (err) {
-      console.error(
-        `Error fetching prescriptions at ${new Date().toISOString()}:`,
-        err.message
-      );
-      res.status(500).json({ message: "Server error" });
-    }
+// Fetch Patient Prescriptions
+router.get("/prescriptions/patient/:patientId", authenticateToken, async (req, res) => {
+  try {
+    const patientId = req.params.patientId;
+    if (!mongoose.Types.ObjectId.isValid(patientId)) return res.status(400).json({ message: "Invalid patientId" });
+    if (req.user.role === "patient" && req.user.id.toString() !== patientId) return res.status(403).json({ message: "Own prescriptions only" });
+    const prescriptions = await Prescription.find({ patientId }).populate("doctorId", "name specialization").populate("patientId", "name email").populate("appointmentId", "date");
+    res.status(200).json(prescriptions);
+  } catch (err) {
+    console.error(`Error fetching prescriptions at ${new Date().toISOString()}:`, err.message);
+    res.status(500).json({ message: "Server error" });
   }
-);
+});
 
-// Fetch Doctor Prescriptions (Protected Route)
-router.get(
-  "/prescriptions/doctor/:doctorId",
-  authenticateToken,
-  async (req, res) => {
-    try {
-      const doctorId = req.params.doctorId;
-      if (!mongoose.Types.ObjectId.isValid(doctorId)) {
-        return res.status(400).json({ message: "Invalid doctorId" });
-      }
-
-      // Verify that the doctorId matches the logged-in user (if role is doctor)
-      if (req.user.role === "doctor") {
-        const doctor = await Doctor.findOne({ userId: req.user.id });
-        if (!doctor || doctor._id.toString() !== doctorId) {
-          return res
-            .status(403)
-            .json({ message: "You can only view your own prescriptions" });
-        }
-      }
-
-      const prescriptions = await Prescription.find({ doctorId })
-        .populate("patientId", "name email")
-        .populate("doctorId", "name specialization")
-        .populate("appointmentId", "date");
-      res.status(200).json(prescriptions);
-    } catch (err) {
-      console.error(
-        `Error fetching doctor prescriptions at ${new Date().toISOString()}:`,
-        err.message
-      );
-      res.status(500).json({ message: "Server error" });
+// Fetch Doctor Prescriptions
+router.get("/prescriptions/doctor/:doctorId", authenticateToken, async (req, res) => {
+  try {
+    const doctorId = req.params.doctorId;
+    if (!mongoose.Types.ObjectId.isValid(doctorId)) return res.status(400).json({ message: "Invalid doctorId" });
+    if (req.user.role === "doctor") {
+      const doctor = await Doctor.findOne({ userId: req.user.id });
+      if (!doctor || doctor._id.toString() !== doctorId) return res.status(403).json({ message: "Own prescriptions only" });
     }
+    const prescriptions = await Prescription.find({ doctorId }).populate("patientId", "name email").populate("doctorId", "name specialization").populate("appointmentId", "date");
+    res.status(200).json(prescriptions);
+  } catch (err) {
+    console.error(`Error fetching doctor prescriptions at ${new Date().toISOString()}:`, err.message);
+    res.status(500).json({ message: "Server error" });
   }
-);
+});
 
 module.exports = router;
